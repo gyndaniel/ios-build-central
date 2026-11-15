@@ -1,0 +1,94 @@
+name: Pipeline Mestre iOS (Build & Package)
+
+on:
+  workflow_call:
+    inputs:
+      scheme_name:
+        description: 'Nome do Scheme / App para compilar'
+        required: true
+        type: string
+      configuration:
+        description: 'Configuração (Debug ou Release)'
+        required: false
+        default: 'Release'
+        type: string
+      project_path:
+        description: 'Caminho da pasta do projeto'
+        required: false
+        default: '.'
+        type: string
+      xcode_version:
+        description: 'Versão do Xcode no macOS Runner'
+        required: false
+        default: '15.4'
+        type: string
+
+jobs:
+  build-and-package:
+    name: 🍏 Compilar App iOS no macOS
+    runs-on: macos-14
+
+    steps:
+      - name: 📥 Clonar Repositório do App
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Configurar Versão do Xcode
+        run: |
+          XCODE_APP="/Applications/Xcode_${{ inputs.xcode_version }}.app"
+          if [ -d "$XCODE_APP" ]; then
+            sudo xcode-select -s "$XCODE_APP/Contents/Developer"
+          else
+            echo "Versão específica não encontrada, usando Xcode padrão:"
+          fi
+          xcodebuild -version
+
+      - name: 📦 Resolver Dependências Swift (SPM)
+        working-directory: ${{ inputs.project_path }}
+        run: |
+          if [ -f *.xcodeproj/project.pbxproj ] || [ -f Package.swift ]; then
+            xcodebuild -resolvePackageDependencies
+          fi
+
+      - name: 🔨 Compilar Projeto (Swift / SwiftUI)
+        working-directory: ${{ inputs.project_path }}
+        run: |
+          mkdir -p build_output
+          xcodebuild \
+            -scheme "${{ inputs.scheme_name }}" \
+            -configuration "${{ inputs.configuration }}" \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath ./build_output \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            clean build
+
+      - name: 📱 Empacotar Aplicativo (.ipa)
+        working-directory: ${{ inputs.project_path }}
+        run: |
+          mkdir -p Payload
+          # Localiza o .app gerado no derivedDataPath
+          APP_PATH=$(find ./build_output -name "*.app" -type d | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "ERRO: Nenhum arquivo .app foi encontrado após o build!"
+            exit 1
+          fi
+          echo "Empacotando aplicativo encontrado em: $APP_PATH"
+          cp -R "$APP_PATH" Payload/
+          zip -r "${{ inputs.scheme_name }}.ipa" Payload
+          ls -lh "${{ inputs.scheme_name }}.ipa"
+
+      - name: 📤 Disponibilizar Aplicativo (.ipa) para Download
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.scheme_name }}-instalador-ipa
+          path: ${{ inputs.project_path }}/${{ inputs.scheme_name }}.ipa
+          retention-days: 14
+
+      - name: 📊 Resumo da Compilação
+        if: always()
+        run: |
+          echo "### 🚀 Resultado do Build iOS" >> $GITHUB_STEP_SUMMARY
+          echo "- **Aplicativo:** ${{ inputs.scheme_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Configuração:** ${{ inputs.configuration }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status:** Concluído com sucesso! ✅" >> $GITHUB_STEP_SUMMARY
+          echo "- **Instalador:** Disponível para download na seção de **Artifacts** desta execução." >> $GITHUB_STEP_SUMMARY
